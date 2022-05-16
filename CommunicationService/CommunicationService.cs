@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -282,6 +282,7 @@ namespace CommunicationServices
                 byte[] data = new byte[datasize];
                 Marshal.Copy(buff, data, 0, datasize);
                 Marshal.FreeHGlobal(buff);
+
                 return data;
             }
 
@@ -321,11 +322,19 @@ namespace CommunicationServices
                 => CombineToByte(StructureToByte(obj1), StructureToByte(obj2));
             public byte[] CombineToByte(byte[] array1, byte[] array2)
             {
-                byte[] rv = new byte[array1.Length + array2.Length];
-                Buffer.BlockCopy(array1, 0, rv, 0, array1.Length);
-                Buffer.BlockCopy(array2, 0, rv, array1.Length, array2.Length);
-                return rv; // 배열을 리턴
+                byte[] temp = new byte[array1.Length + array2.Length];
+                Buffer.BlockCopy(array1, 0, temp, 0, array1.Length);
+                Buffer.BlockCopy(array2, 0, temp, array1.Length, array2.Length);
+
+                return temp; // 배열을 리턴
             }
+
+
+            public T ByteToStructure<T>(byte[] data)
+               => (T)ByteToStructure(data, typeof(T));
+
+            public T ByteToStructure<T>(byte[] data, int start)
+               => (T)ByteToStructure(data, typeof(T), start);
 
             private object ByteToStructure(byte[] data, Type type)
             {
@@ -344,8 +353,6 @@ namespace CommunicationServices
                 }
             }
 
-            public T ByteToStructure<T>(byte[] data)
-               => (T)ByteToStructure(data, typeof(T));
 
             //byte 배열을 구조체로
             private object ByteToStructure(byte[] data, Type type, int start)
@@ -366,9 +373,7 @@ namespace CommunicationServices
                     return null;
                 }
             }
-
-            public T ByteToStructure<T>(byte[] data, int start)
-               => (T)ByteToStructure(data, typeof(T), start);
+            
 
             public string WriteFields(object obj)
             {
@@ -391,6 +396,87 @@ namespace CommunicationServices
 
                 return result;
             }
+
+            public enum Endianness
+            {
+                BigEndian,
+                LittleEndian
+            }
+
+            public static void MaybeAdjustEndianness(Type type, byte[] data, Endianness endianness, int startOffset = 0)
+            {
+                if ((BitConverter.IsLittleEndian) == (endianness == Endianness.LittleEndian))
+                    return;
+
+                foreach (var field in type.GetFields())
+                {
+                    var fieldType = field.FieldType;
+
+                    if (field.IsStatic)
+                        continue;
+
+                    if (fieldType == typeof(string))
+                        continue;
+
+                    var offset = Marshal.OffsetOf(type, field.Name).ToInt32();
+
+                    if (fieldType.IsEnum)
+                        fieldType = Enum.GetUnderlyingType(fieldType);
+
+                    var subFields = fieldType.GetFields().Where(subField => subField.IsStatic == false).ToArray();
+
+                    var effectiveOffset = startOffset + offset;
+
+                    if (subFields.Length == 0)
+                        Array.Reverse(data, effectiveOffset, Marshal.SizeOf(fieldType));
+                    else
+                        MaybeAdjustEndianness(fieldType, data, endianness, effectiveOffset);
+                }
+            }
+
+            public static T? BytesToStruct<T>(byte[] data, Endianness endianness)
+            where T : struct
+            {
+                T result = default(T);
+                var type = typeof(T);
+
+                MaybeAdjustEndianness(type, data, endianness);
+
+                GCHandle handle = GCHandle.Alloc(data, GCHandleType.Pinned);
+
+                try
+                {
+                    IntPtr rawDataPtr = handle.AddrOfPinnedObject();
+                    result = (T)Marshal.PtrToStructure(rawDataPtr, type);
+                }
+                catch
+                {
+                    return null;
+                }
+                finally
+                {
+                    handle.Free();
+                }
+
+                return result;
+            }
+
+
+            //// 바이트 배열을 구조체로 바꾸는 함수 (사이즈가 다를 때, null)
+            //public static T? ByteToStructure<T>(byte[] data)
+            //    where T : struct
+            //    => Marshal.SizeOf<T>() != data.Length ?
+            //        null : (T?)Marshal.PtrToStructure(Assgined_Buffer(data), typeof(T));
+
+
+            //private static IntPtr Assgined_Buffer(byte[] data)
+            //{
+            //    var buffer = Marshal.AllocHGlobal(data.Length);
+            //    Marshal.Copy(data, 0, buffer, data.Length);
+            //    Marshal.FreeHGlobal(buffer);
+
+            //    return buffer;
+            //}
         }
     }
 }
